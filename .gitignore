@@ -1,0 +1,17 @@
+private/
+exports/
+**/bin/
+**/obj/
+**/__pycache__/
+research/
+build/
+dist/
+docs/research/
+src/ChatArchive/Assets/chat-archive-*-v*.png
+src/ChatArchive/Assets/chat-archive-*-v*.ico
+.env
+.env.*
+*.db
+*.db-wal
+*.db-shm
+*.partial
