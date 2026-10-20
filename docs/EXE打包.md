@@ -20,6 +20,8 @@ python -m pip install --target build/python-tools pyinstaller==6.22.3
 
 仅重建桌面外壳时可使用 `./tools/package.ps1 -SkipReader`，但读取模块源码修改后必须完整重新封装。
 
+可用 `./tools/package.ps1 -OutputDirectory dist/preview-0.1.1` 将本地测试版放在独立目录，保留旧版 EXE 和数据。打包会在目标目录同时生成依赖许可证压缩包和对应的 `SHA256SUMS.txt`。测试版首次使用会在其自己的目录生成缓存与导出文件，不会自动复用旧版数据。
+
 ## 2026-10-18验证
 
 - 原有3组自动化测试全部通过。

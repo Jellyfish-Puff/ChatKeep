@@ -73,12 +73,21 @@ public partial class MainWindow : Window
     }
     void RenderPreview()
     {
+        if(Environment.GetCommandLineArgs().Contains("--compact-preview")) {Width=MinWidth;Height=MinHeight;}
+        var previewUrl="https://mp.weixin.qq.com/s?__biz=synthetic-campus&mid=123456789&idx=1&sn=example-only&scene=1&sharer_shareinfo=synthetic-preview";
         var previewChat=new Chat("preview","项目协作群（界面示例）","下周的工作安排已更新");
         chats.Add(previewChat);ApplySearch();ChatTitle.Text=previewChat.Name;Status.Text="界面预览 · 合成示例";GroupCount.Text="群聊列表";
-        using(var doc=JsonDocument.Parse("[{\"id\":\"1\",\"time\":1792249200,\"sender\":\"同事\",\"self\":false,\"text\":\"下周的工作安排已更新，周一上午一起确认。\",\"image\":null},{\"id\":\"2\",\"time\":1792249260,\"sender\":\"我\",\"self\":true,\"text\":\"收到，我会整理好进度。\",\"image\":null}]")) messages.AddRange(doc.RootElement.EnumerateArray().Select(m=>m.Clone()));
+        var previewMessages=new[] {
+            new {id="1",time=1792249200,sender="张同学",self=false,text="[公众号文章]\n标题：校园摄影大赛征稿通知\n公众号：校园宣传部\n链接："+previewUrl,image=(string?)null},
+            new {id="2",time=1792249260,sender="李同学",self=false,text="[引用回复]\n这篇推文的排版可以参考，周三前整理好初稿。\n引用 张同学：\n[公众号文章]\n标题：校园摄影大赛征稿通知\n链接："+previewUrl,image=(string?)null},
+            new {id="3",time=1792249320,sender="我",self=true,text="收到，我来整理摄影大赛的宣传安排。",image=(string?)null},
+            new {id="4",time=1792249380,sender="张同学",self=false,text="[拍一拍]\n张同学 拍了拍 我",image=(string?)null}
+        };
+        using(var doc=JsonDocument.Parse(JsonSerializer.Serialize(previewMessages))) messages.AddRange(doc.RootElement.EnumerateArray().Select(m=>m.Clone()));
         RenderMessages();Notice.Text="界面示例使用合成消息。实际内容由本机微信读取。";
-        UpdateLayout(); var bitmap = new RenderTargetBitmap((int)ActualWidth, (int)ActualHeight, 96, 96, PixelFormats.Pbgra32);
-        bitmap.Render(this); var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        UpdateLayout(); var surface=(FrameworkElement)Content;
+        var bitmap = new RenderTargetBitmap((int)surface.ActualWidth, (int)surface.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(surface); var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
         Directory.CreateDirectory(Path.Combine(root,"docs")); using(var f=File.Create(Path.Combine(root,"docs","interface-preview.png"))) encoder.Save(f);
         Close();
     }
@@ -170,7 +179,12 @@ public partial class MainWindow : Window
                 if(message.TryGetProperty("imageNote",out var note) && !string.IsNullOrEmpty(note.GetString())) picture.Children.Add(new TextBlock{Text=note.GetString(),FontSize=11,Foreground=Brushes.DimGray,Margin=new Thickness(0,6,0,0)});
                 body=picture;
             }
-            else body=new TextBlock {Text=message.GetProperty("text").GetString(),TextWrapping=TextWrapping.Wrap,Foreground=new SolidColorBrush(Color.FromRgb(32,44,37)),MaxWidth=530};
+            else
+            {
+                var content=new TextBox {Text=message.GetProperty("text").GetString(),IsReadOnly=true,IsReadOnlyCaretVisible=true,TextWrapping=TextWrapping.Wrap,Foreground=new SolidColorBrush(Color.FromRgb(32,44,37)),Background=Brushes.Transparent,BorderThickness=new Thickness(0),Padding=new Thickness(0),MaxWidth=530,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,VerticalScrollBarVisibility=ScrollBarVisibility.Disabled};
+                System.Windows.Automation.AutomationProperties.SetName(content,"消息内容，可选择并复制");
+                body=content;
+            }
             stack.Children.Add(new Border {Child=body,Background=new SolidColorBrush((Color)ColorConverter.ConvertFromString(self?"#D9F2DC":"#FFFFFF")),CornerRadius=new CornerRadius(8),Padding=new Thickness(14,10,14,10)});
             MessagePanel.Children.Add(line);
         }

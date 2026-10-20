@@ -7,6 +7,7 @@ from compression import zstd
 from contextlib import closing
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from pathlib import Path
+from message_content import parse_message, export_text, html_text
 
 ROOT = Path(os.environ.get('CHATARCHIVE_DATA_ROOT') or (Path(sys.executable).parent if getattr(sys,'frozen',False) else Path(__file__).resolve().parents[1])).resolve()
 K = C.WinDLL('kernel32', use_last_error=True)
@@ -285,7 +286,11 @@ class Reader:
                     r=dict(row); identity=source.name+':'+str(r['local_id'])
                     if selected is not None and identity not in selected: continue
                     kind=int(r.get('local_type',0))&0xffffffff
-                    body=text(r.get('message_content') or r.get('compress_content'))
+                    decode_error=False
+                    try:
+                        body=text(r.get('message_content') or r.get('compress_content'))
+                    except (ValueError, TypeError, zstd.ZstdError):
+                        body=''; decode_error=True
                     sender=names.get(r.get('real_sender_id'),'未知发送者')
                     # Some group text records retain a sender prefix.
                     if body.startswith(sender+':\n'): body=body[len(sender)+2:]
@@ -294,9 +299,9 @@ class Reader:
                         msg['text']='[图片]'; msg['image']=self.image(chat,body,r.get('packed_info_data'))
                         msg['imageNote']=getattr(self,'last_image_note','') if msg['image'] else ''
                         if not msg['image']: msg['text']='[图片：本地资源缺失或暂无法解码]'
-                    elif kind!=1:
-                        labels={34:'语音',43:'视频',47:'表情',49:'文件或链接',10000:'系统消息',10002:'系统消息'}
-                        msg['text']='['+labels.get(kind,'暂未支持的消息')+']'+ (body if kind in (10000,10002) else '')
+                    else:
+                        msg.update(parse_message(kind,body,self.names))
+                        if decode_error: msg['text']='[消息正文暂无法解码]'
                     output.append(msg)
         output.sort(key=lambda m:(m['time'],m['sort'],int(m['id'].split(':')[-1]),m['id']))
         if limit and len(output)>limit:
@@ -393,9 +398,9 @@ class Reader:
         if start>=end: raise ValueError('开始日期不能晚于结束日期')
         selected=request.get('selected'); records=self.messages(request['chat'],int(start.timestamp()),int(end.timestamp()),limit=None,selected=set(selected) if selected is not None else None)
         if not records: raise ValueError('所选范围没有消息，请调整日期或勾选范围。')
-        title=html.escape(self.names.get(request['chat'],request['chat'])); blocks=[]
+        title=html.escape(self.names.get(request['chat'],request['chat'])); blocks=[]; article_numbers={}
         for m in records:
-            content='<img src="'+m['image']+'" alt="聊天图片">' if m['image'] else html.escape(m['text'])
+            content='<img src="'+m['image']+'" alt="聊天图片">' if m['image'] else html_text(export_text(m,article_numbers),m.get('links',[]))
             if m.get('imageNote'): content+='<br><small>'+html.escape(m['imageNote'])+'</small>'
             stamp=datetime.datetime.fromtimestamp(m['time']).strftime('%Y-%m-%d %H:%M:%S')
             blocks.append('<article class="'+('self' if m['self'] else '')+'"><header>'+html.escape(m['sender'])+' · '+stamp+'</header><div>'+content+'</div></article>')
