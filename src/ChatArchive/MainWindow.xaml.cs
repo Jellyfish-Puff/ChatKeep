@@ -84,6 +84,21 @@ public partial class MainWindow : Window
             new {id="4",time=1792249380,sender="张同学",self=false,text="[拍一拍]\n张同学 拍了拍 我",image=(string?)null}
         };
         using(var doc=JsonDocument.Parse(JsonSerializer.Serialize(previewMessages))) messages.AddRange(doc.RootElement.EnumerateArray().Select(m=>m.Clone()));
+        if(Environment.GetCommandLineArgs().Contains("--image-preview"))
+        {
+            var visual=new DrawingVisual();
+            using(var drawing=visual.RenderOpen())
+            {
+                drawing.DrawRectangle(Brushes.White,null,new Rect(0,0,960,540));
+                drawing.DrawRectangle(new SolidColorBrush(Color.FromRgb(10,155,125)),null,new Rect(24,24,912,160));
+                drawing.DrawText(new FormattedText("宣传部工作安排 · 合成图片",System.Globalization.CultureInfo.CurrentCulture,FlowDirection.LeftToRight,new Typeface("Microsoft YaHei"),42,Brushes.White,1),new Point(48,70));
+                drawing.DrawText(new FormattedText("一、整理摄影大赛宣传文案\n二、周三前确认排版与配图\n三、导出时保留图片像素尺寸",System.Globalization.CultureInfo.CurrentCulture,FlowDirection.LeftToRight,new Typeface("Microsoft YaHei"),32,Brushes.Black,1),new Point(48,240));
+            }
+            var preview=new RenderTargetBitmap(960,540,96,96,PixelFormats.Pbgra32);preview.Render(visual);
+            var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(preview));using var encoded=new MemoryStream();png.Save(encoded);
+            using var imageDoc=JsonDocument.Parse(JsonSerializer.Serialize(new {id="0",time=1792249140,sender="张同学",self=false,text="[图片]",image="data:image/png;base64,"+Convert.ToBase64String(encoded.ToArray()),imageWidth=960,imageQuality="large",imageNote="本地大图 · 960 × 540 像素（合成示例）"}));
+            messages.Insert(0,imageDoc.RootElement.Clone());
+        }
         RenderMessages();Notice.Text="界面示例使用合成消息。实际内容由本机微信读取。";
         UpdateLayout(); var surface=(FrameworkElement)Content;
         var bitmap = new RenderTargetBitmap((int)surface.ActualWidth, (int)surface.ActualHeight, 96, 96, PixelFormats.Pbgra32);
@@ -174,14 +189,24 @@ public partial class MainWindow : Window
             if(message.GetProperty("image").ValueKind==JsonValueKind.String)
             {
                 var uri=message.GetProperty("image").GetString()!; using var stream=new MemoryStream(Convert.FromBase64String(uri[(uri.IndexOf(',')+1)..]));
-                var bmp=new BitmapImage(); bmp.BeginInit();bmp.CacheOption=BitmapCacheOption.OnLoad;bmp.StreamSource=stream;bmp.EndInit();bmp.Freeze();
+                var bmp=new BitmapImage(); bmp.BeginInit();bmp.CacheOption=BitmapCacheOption.OnLoad;
+                if(message.TryGetProperty("imageWidth",out var width) && width.GetInt32()>0) bmp.DecodePixelWidth=Math.Min(680,width.GetInt32());
+                bmp.StreamSource=stream;bmp.EndInit();bmp.Freeze();
                 var picture=new StackPanel();picture.Children.Add(new Image {Source=bmp,MaxWidth=340,MaxHeight=300,Stretch=Stretch.Uniform});
-                if(message.TryGetProperty("imageNote",out var note) && !string.IsNullOrEmpty(note.GetString())) picture.Children.Add(new TextBlock{Text=note.GetString(),FontSize=11,Foreground=Brushes.DimGray,Margin=new Thickness(0,6,0,0)});
+                if(message.TryGetProperty("imageNote",out var note) && !string.IsNullOrEmpty(note.GetString())) picture.Children.Add(new TextBlock{Text=note.GetString(),TextWrapping=TextWrapping.Wrap,MaxWidth=340,FontSize=11,Foreground=Brushes.DimGray,Margin=new Thickness(0,6,0,0)});
+                if(message.TryGetProperty("imageQuality",out var quality) && quality.GetString() is "image" or "large")
+                {
+                    var view=new Button {Content="查看大图",HorizontalAlignment=HorizontalAlignment.Left,Margin=new Thickness(0,8,0,0),Padding=new Thickness(12,6,12,6)};
+                    view.Click+=(_,_)=>ShowFullImage(uri);picture.Children.Add(view);
+                }
                 body=picture;
             }
             else
             {
-                var content=new TextBox {Text=message.GetProperty("text").GetString(),IsReadOnly=true,IsReadOnlyCaretVisible=true,TextWrapping=TextWrapping.Wrap,Foreground=new SolidColorBrush(Color.FromRgb(32,44,37)),Background=Brushes.Transparent,BorderThickness=new Thickness(0),Padding=new Thickness(0),MaxWidth=530,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,VerticalScrollBarVisibility=ScrollBarVisibility.Disabled};
+                var content=new TextBox {Text=message.GetProperty("text").GetString() ?? "",IsReadOnly=true,IsReadOnlyCaretVisible=true,IsUndoEnabled=false,TextWrapping=TextWrapping.Wrap,Foreground=new SolidColorBrush(Color.FromRgb(32,44,37)),Background=Brushes.Transparent,BorderThickness=new Thickness(0),Padding=new Thickness(0),MaxWidth=530,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,VerticalScrollBarVisibility=ScrollBarVisibility.Disabled};
+                // Font fallback for keycap emoji can make WPF measure/render disagree,
+                // terminating the process. Prefer the installed emoji font explicitly.
+                if(content.Text.Contains('\u20e3')) content.FontFamily=new FontFamily("Segoe UI Emoji, Microsoft YaHei UI");
                 System.Windows.Automation.AutomationProperties.SetName(content,"消息内容，可选择并复制");
                 body=content;
             }
@@ -191,6 +216,16 @@ public partial class MainWindow : Window
         UpdateCount();
     }
     void UpdateCount() => SelectionCount.Text=selected.Count==0?"未选择消息":$"已选择 {selected.Count} 条消息";
+    void ShowFullImage(string uri)
+    {
+        try
+        {
+            using var stream=new MemoryStream(Convert.FromBase64String(uri[(uri.IndexOf(',')+1)..]));
+            var bitmap=new BitmapImage();bitmap.BeginInit();bitmap.CacheOption=BitmapCacheOption.OnLoad;bitmap.StreamSource=stream;bitmap.EndInit();bitmap.Freeze();
+            new ImageViewerWindow(bitmap) {Owner=this}.Show();
+        }
+        catch(Exception ex) {ShowError(ex);}
+    }
     async void ExportClick(object sender,RoutedEventArgs e)
     {
         if(chat==null) return;
@@ -207,7 +242,8 @@ public partial class MainWindow : Window
         {
             var result=await Request(new {action="export",chat,start=dialog.StartDate.ToString("yyyy-MM-dd"),end=dialog.EndDate.ToString("yyyy-MM-dd"),selected=dialog.OnlySelected?selected.ToArray():null,path=picker.FileName});
             var count=result.GetProperty("count").GetInt32();var missing=result.GetProperty("missingImages").GetInt32();
-            Notice.Text=$"已导出 {count} 条消息"+(missing>0?$"，其中 {missing} 张图片缺失或无法解码，文件内已标注。":"，图片已嵌入 HTML。");
+            var thumbnails=result.GetProperty("thumbnailImages").GetInt32();
+            Notice.Text=$"已导出 {count} 条消息，图片已嵌入 HTML。"+(thumbnails>0?$"{thumbnails} 张使用缩略图，文件内已标注。":"")+(missing>0?$"{missing} 张图片缺失或无法解码。":"");
             Process.Start(new ProcessStartInfo("explorer.exe","/select,\""+picker.FileName+"\""){UseShellExecute=true});
         }
         catch(Exception ex) {ShowError(ex);}

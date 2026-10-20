@@ -8,6 +8,8 @@ from contextlib import closing
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from pathlib import Path
 from message_content import parse_message, export_text, html_text
+from image_codec import WxgfDecoder, serve_codec, MAX_PIXELS
+from image_resources import build_image_index, image_hashes, select_image
 
 ROOT = Path(os.environ.get('CHATARCHIVE_DATA_ROOT') or (Path(sys.executable).parent if getattr(sys,'frozen',False) else Path(__file__).resolve().parents[1])).resolve()
 K = C.WinDLL('kernel32', use_last_error=True)
@@ -236,6 +238,10 @@ def text(value):
 class Reader:
     def __init__(self):
         self.keys={}; self.user=None; self.names={}; self.shards=[]; self.image_key=None; self.image_index={}; self.image_key_attempted=False
+        self.image_decoder=WxgfDecoder()
+
+    def close(self):
+        self.image_decoder.close()
 
     def connect(self):
         stats,keys,users=probe()
@@ -247,6 +253,7 @@ class Reader:
                 if salt in keys: candidates.append(user)
         if len(candidates)!=1: raise RuntimeError('未能唯一识别已登录账号，请确保只有一个微信账号处于登录状态。')
         self.user=candidates[0]; self.keys=keys; self.shards=[]; self.image_index={}; self.image_key=None; self.image_key_attempted=False
+        if hasattr(self,'image_xor'): del self.image_xor
         contact=snapshot(self.user/'db_storage/contact/contact.db',keys)
         with closing(sqlite3.connect(contact)) as db:
             self.names={row[0]:row[2] or row[1] or row[0] for row in db.execute('SELECT username,nick_name,remark FROM contact')}
@@ -265,6 +272,8 @@ class Reader:
 
     def messages(self,chat,start=None,end=None,before=None,limit=100,selected=None):
         table='Msg_'+hashlib.md5(chat.encode()).hexdigest(); output=[]
+        # Newly downloaded local images must be visible on the next load/export.
+        self.image_index.pop(chat,None)
         for source,cached in self.databases():
             with closing(sqlite3.connect(cached)) as db:
                 db.row_factory=sqlite3.Row
@@ -297,8 +306,9 @@ class Reader:
                     msg={'id':identity,'time':int(r['create_time']),'sort':int(r.get('sort_seq') or 0),'sender':self.names.get(sender,sender),'self':sender==self.user.name.rsplit('_',1)[0],'type':kind,'text':body,'image':None}
                     if kind==3:
                         msg['text']='[图片]'; msg['image']=self.image(chat,body,r.get('packed_info_data'))
-                        msg['imageNote']=getattr(self,'last_image_note','') if msg['image'] else ''
-                        if not msg['image']: msg['text']='[图片：本地资源缺失或暂无法解码]'
+                        info=self.last_image_info
+                        msg.update(imageNote=info['note'],imageWidth=info['width'],imageHeight=info['height'],imageQuality=info['quality'],imageConverted=info['converted'],imageUnavailableAlternatives=info['unavailableAlternatives'])
+                        if not msg['image']: msg['text']='[图片：'+info['note']+']'
                     else:
                         msg.update(parse_message(kind,body,self.names))
                         if decode_error: msg['text']='[消息正文暂无法解码]'
@@ -346,30 +356,18 @@ class Reader:
         return None
 
     def image(self,chat,body,packed=None):
-        hashes=re.findall(r'(?:md5|cdnthumbmd5)=["\x27]([a-fA-F0-9]{32})',body)
-        hashes += [v.decode() for v in re.findall(rb'[a-fA-F0-9]{32}',packed or b'')]
-        if not hashes: return None
+        hashes=image_hashes(body,packed)
         folder=self.user/'msg/attach'/hashlib.md5(chat.encode()).hexdigest()
-        if chat not in self.image_index:
-            self.image_index[chat]={p.name.lower():p for p in folder.rglob('*.dat')}
-        index=self.image_index[chat]
-        for digest in hashes:
-            for suffix in ('_h.dat','.dat','_t.dat'):
-                file=index.get(digest.lower()+suffix)
-                if file:
-                    try:
-                        raw=self.decode_image(file.read_bytes())
-                        from PIL import Image
-                        im=Image.open(io.BytesIO(raw)); im.verify()
-                        mime={'JPEG':'image/jpeg','PNG':'image/png','GIF':'image/gif','WEBP':'image/webp'}.get(im.format)
-                        if mime:
-                            self.last_image_note='本地缩略图' if suffix=='_t.dat' else ''
-                            return 'data:'+mime+';base64,'+base64.b64encode(raw).decode()
-                    except (ValueError,OSError): continue
-        return None
+        if hashes and chat not in self.image_index:
+            self.image_index[chat]=build_image_index(folder)
+        self.last_image_info=select_image(hashes,self.image_index.get(chat,{}),self.decode_image,self.image_decoder.decode)
+        self.last_image_note=self.last_image_info['note']
+        return self.last_image_info['uri']
 
     def decode_image(self,data):
+        if data.startswith(b'wxgf'): return data
         if data.startswith(b'\x07\x08V2\x08\x07'):
+            if len(data)<15: raise ValueError('图片不完整')
             aes_size,xor_size=struct.unpack_from('<II',data,6); block=(aes_size//16+1)*16
             if len(data)<15+block+xor_size: raise ValueError('图片不完整')
             if self.image_key is None and not self.image_key_attempted:
@@ -386,7 +384,14 @@ class Reader:
                 else: raise ValueError('尚未适配这种图片尾部格式')
                 tail=bytes(v^xor for v in data[-xor_size:])
             else: tail=b''
-            return prefix+middle+tail
+            plain=prefix+middle+tail
+            if xor_size and not hasattr(self,'image_xor') and prefix.startswith(b'\xff\xd8\xff') and plain.endswith(b'\xff\xd9'):
+                from PIL import Image
+                with Image.open(io.BytesIO(plain)) as image:
+                    if not 0<image.width*image.height<=MAX_PIXELS: raise ValueError('图片超过本地像素限制')
+                    image.load()
+                self.image_xor=xor
+            return plain
         for signature in (b'\xff\xd8\xff',b'\x89PNG',b'GIF8',b'RIFF'):
             key=data[0]^signature[0]
             if bytes(v^key for v in data[:len(signature)])==signature: return bytes(v^key for v in data)
@@ -400,13 +405,14 @@ class Reader:
         if not records: raise ValueError('所选范围没有消息，请调整日期或勾选范围。')
         title=html.escape(self.names.get(request['chat'],request['chat'])); blocks=[]; article_numbers={}
         for m in records:
-            content='<img src="'+m['image']+'" alt="聊天图片">' if m['image'] else html_text(export_text(m,article_numbers),m.get('links',[]))
-            if m.get('imageNote'): content+='<br><small>'+html.escape(m['imageNote'])+'</small>'
+            content=('<details class="image-view"><summary><span class="image-fit-label">点击图片查看原始尺寸</span><span class="image-original-label">点击图片恢复页面预览</span><br><img src="'+m['image']+'" alt="聊天图片"></summary></details>') if m['image'] else html_text(export_text(m,article_numbers),m.get('links',[]))
+            if m['image'] and m.get('imageNote'): content+='<br><small>'+html.escape(m['imageNote'])+'</small>'
             stamp=datetime.datetime.fromtimestamp(m['time']).strftime('%Y-%m-%d %H:%M:%S')
-            blocks.append('<article class="'+('self' if m['self'] else '')+'"><header>'+html.escape(m['sender'])+' · '+stamp+'</header><div>'+content+'</div></article>')
+            blocks.append('<article class="'+('self' if m['self'] else '')+'"><header>'+html.escape(m['sender'])+' · '+stamp+'</header><div'+(' class="image-frame"' if m['image'] else '')+'>'+content+'</div></article>')
         doc='<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'"><title>'+title+'</title><style>body{font:15px/1.65 "Microsoft YaHei",sans-serif;background:#f4f5f7;color:#202724;margin:0}main{max-width:920px;margin:auto;padding:32px}h1{font-size:24px}p,header{color:#59665f}article{margin:24px 0}article div{display:inline-block;background:white;border-radius:10px;padding:12px 16px;white-space:pre-wrap;overflow-wrap:anywhere;max-width:85%}.self{text-align:right}.self div{background:#d9f2dc;text-align:left}header{font-size:12px;margin:6px}img{max-width:100%;max-height:600px}footer{margin-top:40px;color:#59665f}</style><main><h1>'+title+'</h1><p>'+request['start']+' — '+request['end']+' · '+str(len(records))+' 条消息</p>'+''.join(blocks)+'<footer>由聊存 ChatKeep 生成 · 图片已嵌入文件 · 本地缺失资源会保留占位说明</footer></main></html>'
+        doc=doc.replace('</style>','.image-frame{overflow:auto;max-height:85vh}.image-view summary{list-style:none;cursor:zoom-in}.image-view summary:focus-visible{outline:2px solid #087f65}.image-view[open] summary{cursor:zoom-out}.image-view[open] img{max-width:none;max-height:none}.image-view span{font-size:12px;color:#087f65}.image-original-label{display:none}.image-view[open] .image-fit-label{display:none}.image-view[open] .image-original-label{display:inline}</style>')
         destination=Path(request['path']); temporary=destination.with_suffix('.html.partial'); temporary.write_text(doc,encoding='utf-8'); temporary.replace(destination)
-        return {'count':len(records),'missingImages':sum(m['type']==3 and not m['image'] for m in records),'path':str(destination)}
+        return {'count':len(records),'missingImages':sum(m['type']==3 and not m['image'] for m in records),'thumbnailImages':sum(bool(m['image']) and m.get('imageQuality')=='thumbnail' for m in records),'convertedImages':sum(bool(m['image']) and bool(m.get('imageConverted')) for m in records),'imagesWithUnavailableAlternatives':sum(bool(m['image']) and bool(m.get('imageUnavailableAlternatives')) for m in records),'path':str(destination)}
 
 def serve():
     reader=Reader()
@@ -420,9 +426,11 @@ def serve():
             print(json.dumps({'ok':True,'data':result},ensure_ascii=False),flush=True)
         except Exception as exc:
             print(json.dumps({'ok':False,'error':str(exc)},ensure_ascii=False),flush=True)
+    reader.close()
 
 if __name__=='__main__':
-    if '--serve' in sys.argv: serve()
+    if '--image-codec' in sys.argv: serve_codec()
+    elif '--serve' in sys.argv: serve()
     elif '--schema' in sys.argv: print(json.dumps(inspect_schema(),ensure_ascii=False))
     else:
         result,_,_=probe(); print(json.dumps(result))

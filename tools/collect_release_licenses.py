@@ -12,12 +12,12 @@ for file in (root/'licenses').glob('*.txt'):
 texts['THIRD_PARTY_NOTICES.md']=root/'THIRD_PARTY_NOTICES.md'
 python_license=Path(sys.base_prefix)/'LICENSE.txt'
 if python_license.exists():texts['Python/LICENSE.txt']=python_license
-for name in ('cryptography','Pillow','PyInstaller'):
+for name in ('cryptography','Pillow','PyInstaller','av'):
     distribution=metadata.distribution(name)
     for relative in distribution.files or []:
         if 'licenses' in relative.parts:
             file=Path(distribution.locate_file(relative))
-            if file.is_file():texts[name+'/'+file.name]=file
+            if file.is_file() and file.suffix != '.pyc':texts[name+'/'+file.name]=file
 assets=json.loads((root/'src/ChatArchive/obj/project.assets.json').read_text(encoding='utf-8'))
 runtime_config=json.loads((root/'src/ChatArchive/bin/Release/net10.0-windows/win-x64/ChatKeep.runtimeconfig.json').read_text(encoding='utf-8'))
 for framework in runtime_config['runtimeOptions'].get('includedFrameworks',[]):
