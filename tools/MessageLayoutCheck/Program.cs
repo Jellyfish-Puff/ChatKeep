@@ -52,7 +52,8 @@ class Program
                     await Task.Delay(50);
                 }
                 var viewerCases=await ImageViewerChecks.Run(window,args.FirstOrDefault());
-                Console.WriteLine(JsonSerializer.Serialize(new {ok=true,messages=payload.Count,cycles=6,viewerCases}));
+                var batchCases=await BatchExportChecks.Run(window,args.FirstOrDefault());
+                Console.WriteLine(JsonSerializer.Serialize(new {ok=true,messages=payload.Count,cycles=6,viewerCases,batchCases}));
                 window.Close();Dispatcher.CurrentDispatcher.BeginInvokeShutdown(DispatcherPriority.Background);
             }
             catch(Exception ex)

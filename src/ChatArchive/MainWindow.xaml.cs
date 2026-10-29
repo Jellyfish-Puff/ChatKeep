@@ -106,7 +106,7 @@ public partial class MainWindow : Window
         Directory.CreateDirectory(Path.Combine(root,"docs")); using(var f=File.Create(Path.Combine(root,"docs","interface-preview.png"))) encoder.Save(f);
         Close();
     }
-    async Task<JsonElement> Request(object data)
+    async Task<JsonElement> Request(object data, Action<JsonElement>? progress=null)
     {
         await gate.WaitAsync();
         try
@@ -122,16 +122,25 @@ public partial class MainWindow : Window
                 worker.ErrorDataReceived += (_,_) => { }; worker.BeginErrorReadLine();
             }
             await worker.StandardInput.WriteLineAsync(JsonSerializer.Serialize(data)); await worker.StandardInput.FlushAsync();
-            var line=await worker.StandardOutput.ReadLineAsync() ?? throw new Exception("读取模块已退出，请重新连接。");
-            using var doc=JsonDocument.Parse(line); var result=doc.RootElement;
-            if(!result.GetProperty("ok").GetBoolean()) throw new Exception(result.GetProperty("error").GetString());
-            return result.GetProperty("data").Clone();
+            while(true)
+            {
+                var line=await worker.StandardOutput.ReadLineAsync() ?? throw new Exception("读取模块已退出，请重新连接。");
+                using var doc=JsonDocument.Parse(line); var result=doc.RootElement;
+                if(result.TryGetProperty("event",out var kind) && kind.GetString()=="progress")
+                {
+                    progress?.Invoke(result.GetProperty("data"));
+                    continue;
+                }
+                if(!result.GetProperty("ok").GetBoolean()) throw new Exception(result.GetProperty("error").GetString());
+                return result.GetProperty("data").Clone();
+            }
         }
         finally { gate.Release(); }
     }
     void SetBusy(bool value, string? notice=null)
     {
         busy=value; ConnectButton.IsEnabled=!value; ChatList.IsEnabled=!value; Search.IsEnabled=!value;
+        BatchExportButton.IsEnabled=!value && chats.Count>0;
         ExportButton.IsEnabled=!value && chat!=null; OlderButton.IsEnabled=!value && messages.Count>0; SelectionMode.IsEnabled=!value;
         if(notice!=null) Notice.Text=notice;
     }
@@ -245,6 +254,30 @@ public partial class MainWindow : Window
             var thumbnails=result.GetProperty("thumbnailImages").GetInt32();
             Notice.Text=$"已导出 {count} 条消息，图片已嵌入 HTML。"+(thumbnails>0?$"{thumbnails} 张使用缩略图，文件内已标注。":"")+(missing>0?$"{missing} 张图片缺失或无法解码。":"");
             Process.Start(new ProcessStartInfo("explorer.exe","/select,\""+picker.FileName+"\""){UseShellExecute=true});
+        }
+        catch(Exception ex) {ShowError(ex);}
+        finally {SetBusy(false);}
+    }
+    async void BatchExportClick(object sender,RoutedEventArgs e)
+    {
+        if(busy || chats.Count==0) return;
+        try
+        {
+            var folder=Path.Combine(root,"exports");Directory.CreateDirectory(folder);
+            var preferencesPath=Path.Combine(root,"private","batch-export.json");
+            var dialog=new BatchExportWindow(chats,BatchExportPreferences.Load(preferencesPath),folder) {Owner=this};
+            if(dialog.ShowDialog()!=true) return;
+            var warning="";
+            try { new BatchExportPreferences {Chats=dialog.SelectedChats,Mode=dialog.Mode}.Save(preferencesPath); }
+            catch(Exception ex) when(ex is IOException or UnauthorizedAccessException) {warning="本次导出仍可进行，但未能保存上次选择设置。";}
+            SetBusy(true,"正在准备批量导出文字和本地图片……");
+            var result=await Request(new {action="export_batch",chats=dialog.SelectedChats,mode=dialog.Mode,
+                start=dialog.StartDate.ToString("yyyy-MM-dd"),end=dialog.EndDate.ToString("yyyy-MM-dd"),folder=dialog.Folder},
+                p=>Notice.Text=$"正在导出第 {p.GetProperty("index").GetInt32()} / {p.GetProperty("total").GetInt32()} 个群聊：{p.GetProperty("name").GetString()}……");
+            var groups=result.GetProperty("results").EnumerateArray().ToList();
+            Notice.Text=$"批量导出完成：{groups.Count(g=>g.GetProperty("status").GetString()=="exported")} 个群聊，{result.GetProperty("count").GetInt32()} 条消息；"
+                +$"{groups.Count(g=>g.GetProperty("status").GetString()=="empty")} 个群聊无消息，{groups.Count(g=>g.GetProperty("status").GetString()=="failed")} 个失败。";
+            new BatchExportResultWindow(result,warning) {Owner=this}.ShowDialog();
         }
         catch(Exception ex) {ShowError(ex);}
         finally {SetBusy(false);}

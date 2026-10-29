@@ -2,12 +2,13 @@
 import ctypes as C
 from ctypes import wintypes as W
 import hashlib, hmac, json, os, re, struct, sys, time, sqlite3
-import base64, html, datetime, io, tempfile, shutil
+import base64, io, tempfile, shutil
 from compression import zstd
 from contextlib import closing
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from pathlib import Path
-from message_content import parse_message, export_text, html_text
+from message_content import parse_message
+from batch_export import export_single, export_batch
 from image_codec import WxgfDecoder, serve_codec, MAX_PIXELS
 from image_resources import build_image_index, image_hashes, select_image
 
@@ -398,21 +399,11 @@ class Reader:
         raise ValueError('不支持的图片格式')
 
     def export(self,request):
-        start=datetime.datetime.strptime(request['start'],'%Y-%m-%d')
-        end=datetime.datetime.strptime(request['end'],'%Y-%m-%d')+datetime.timedelta(days=1)
-        if start>=end: raise ValueError('开始日期不能晚于结束日期')
-        selected=request.get('selected'); records=self.messages(request['chat'],int(start.timestamp()),int(end.timestamp()),limit=None,selected=set(selected) if selected is not None else None)
-        if not records: raise ValueError('所选范围没有消息，请调整日期或勾选范围。')
-        title=html.escape(self.names.get(request['chat'],request['chat'])); blocks=[]; article_numbers={}
-        for m in records:
-            content=('<details class="image-view"><summary><span class="image-fit-label">点击图片查看原始尺寸</span><span class="image-original-label">点击图片恢复页面预览</span><br><img src="'+m['image']+'" alt="聊天图片"></summary></details>') if m['image'] else html_text(export_text(m,article_numbers),m.get('links',[]))
-            if m['image'] and m.get('imageNote'): content+='<br><small>'+html.escape(m['imageNote'])+'</small>'
-            stamp=datetime.datetime.fromtimestamp(m['time']).strftime('%Y-%m-%d %H:%M:%S')
-            blocks.append('<article class="'+('self' if m['self'] else '')+'"><header>'+html.escape(m['sender'])+' · '+stamp+'</header><div'+(' class="image-frame"' if m['image'] else '')+'>'+content+'</div></article>')
-        doc='<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'"><title>'+title+'</title><style>body{font:15px/1.65 "Microsoft YaHei",sans-serif;background:#f4f5f7;color:#202724;margin:0}main{max-width:920px;margin:auto;padding:32px}h1{font-size:24px}p,header{color:#59665f}article{margin:24px 0}article div{display:inline-block;background:white;border-radius:10px;padding:12px 16px;white-space:pre-wrap;overflow-wrap:anywhere;max-width:85%}.self{text-align:right}.self div{background:#d9f2dc;text-align:left}header{font-size:12px;margin:6px}img{max-width:100%;max-height:600px}footer{margin-top:40px;color:#59665f}</style><main><h1>'+title+'</h1><p>'+request['start']+' — '+request['end']+' · '+str(len(records))+' 条消息</p>'+''.join(blocks)+'<footer>由聊存 ChatKeep 生成 · 图片已嵌入文件 · 本地缺失资源会保留占位说明</footer></main></html>'
-        doc=doc.replace('</style>','.image-frame{overflow:auto;max-height:85vh}.image-view summary{list-style:none;cursor:zoom-in}.image-view summary:focus-visible{outline:2px solid #087f65}.image-view[open] summary{cursor:zoom-out}.image-view[open] img{max-width:none;max-height:none}.image-view span{font-size:12px;color:#087f65}.image-original-label{display:none}.image-view[open] .image-fit-label{display:none}.image-view[open] .image-original-label{display:inline}</style>')
-        destination=Path(request['path']); temporary=destination.with_suffix('.html.partial'); temporary.write_text(doc,encoding='utf-8'); temporary.replace(destination)
-        return {'count':len(records),'missingImages':sum(m['type']==3 and not m['image'] for m in records),'thumbnailImages':sum(bool(m['image']) and m.get('imageQuality')=='thumbnail' for m in records),'convertedImages':sum(bool(m['image']) and bool(m.get('imageConverted')) for m in records),'imagesWithUnavailableAlternatives':sum(bool(m['image']) and bool(m.get('imageUnavailableAlternatives')) for m in records),'path':str(destination)}
+        return export_single(self,request)
+
+    def export_batch(self,request,progress=None):
+        return export_batch(self,request,progress)
+
 
 def serve():
     reader=Reader()
@@ -422,6 +413,7 @@ def serve():
             if action=='connect': result=reader.connect()
             elif action=='messages': result=reader.messages(request['chat'],before=request.get('before'))
             elif action=='export': result=reader.export(request)
+            elif action=='export_batch': result=reader.export_batch(request,lambda data: print(json.dumps({'event':'progress','data':data},ensure_ascii=False),flush=True))
             else: raise ValueError('未知操作')
             print(json.dumps({'ok':True,'data':result},ensure_ascii=False),flush=True)
         except Exception as exc:

@@ -32,6 +32,10 @@ python -m pip install --target build/python-tools pyinstaller==6.22.3
 
 本机最终0.1.4 EXE为140669815字节，比0.1.3增加9216字节（9 KiB）。独立目录、无外部Python/.NET路径下的合成图片界面启动检查通过；旧版本EXE保留。
 
+## v0.1.5 批量导出
+
+v0.1.5 批量导出版使用 `./tools/package.ps1 -OutputDirectory dist/preview-0.1.5` 完整重封装。此次读取代码和 HTML 渲染代码有变动，不能使用 `-SkipReader`。正式成品副本位于 `dist/release-v0.1.5/ChatKeep.exe`，与用户确认的测试版字节一致，140692343 字节。旧成品及其缓存均保留；不要将根目录 `dist/ChatKeep.exe` 误当作新版。
+
 ## 2026-10-18验证
 
 - 原有3组自动化测试全部通过。
