@@ -271,7 +271,10 @@ class Reader:
                     self.shards.append((path,snapshot(path,self.keys)))
         return self.shards
 
-    def messages(self,chat,start=None,end=None,before=None,limit=100,selected=None):
+    def messages(self,chat,start=None,end=None,before=None,limit=100,selected=None,query=None):
+        if query is not None:
+            if not isinstance(query,str) or not query.strip() or len(query)>256: raise ValueError('请输入1至256个字符的搜索词。')
+            query=query.strip().casefold()
         table='Msg_'+hashlib.md5(chat.encode()).hexdigest(); output=[]
         # Newly downloaded local images must be visible on the next load/export.
         self.image_index.pop(chat,None)
@@ -286,16 +289,19 @@ class Reader:
                 if before is not None: clauses.append('create_time<?'); params.append(before)
                 where=' WHERE '+' AND '.join(clauses) if clauses else ''
                 sql=f'SELECT * FROM "{table}"'+where+' ORDER BY create_time DESC,sort_seq DESC,local_id DESC'
-                if limit:
+                if limit and query is None:
                     boundary=db.execute(sql+' LIMIT ?',params+[limit]).fetchall()
                     if not boundary: continue
                     cutoff=int(boundary[-1]['create_time'])
                     where2=(where+' AND ' if where else ' WHERE ')+'create_time>=?'
                     sql=f'SELECT * FROM "{table}"'+where2+' ORDER BY create_time DESC,sort_seq DESC,local_id DESC'; params.append(cutoff)
+                matched=0; search_cutoff=None
                 for row in db.execute(sql,params):
+                    if search_cutoff is not None and int(row["create_time"])<search_cutoff: break
                     r=dict(row); identity=source.name+':'+str(r['local_id'])
                     if selected is not None and identity not in selected: continue
                     kind=int(r.get('local_type',0))&0xffffffff
+                    if query is not None and kind==3: continue  # No image decoding or OCR during text search.
                     decode_error=False
                     try:
                         body=text(r.get('message_content') or r.get('compress_content'))
@@ -313,6 +319,10 @@ class Reader:
                     else:
                         msg.update(parse_message(kind,body,self.names))
                         if decode_error: msg['text']='[消息正文暂无法解码]'
+                    if query is not None:
+                        if query not in msg['text'].casefold(): continue
+                        matched+=1
+                        if limit and matched==limit: search_cutoff=msg['time']
                     output.append(msg)
         output.sort(key=lambda m:(m['time'],m['sort'],int(m['id'].split(':')[-1]),m['id']))
         if limit and len(output)>limit:
@@ -412,6 +422,7 @@ def serve():
             request=json.loads(line); action=request['action']
             if action=='connect': result=reader.connect()
             elif action=='messages': result=reader.messages(request['chat'],before=request.get('before'))
+            elif action=='search': result=reader.messages(request['chat'],before=request.get('before'),query=request['query'])
             elif action=='export': result=reader.export(request)
             elif action=='export_batch': result=reader.export_batch(request,lambda data: print(json.dumps({'event':'progress','data':data},ensure_ascii=False),flush=True))
             else: raise ValueError('未知操作')

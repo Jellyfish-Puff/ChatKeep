@@ -3,7 +3,7 @@
     <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><AssemblyName>ChatKeep</AssemblyName>
     <Product>聊存 ChatKeep</Product><Title>聊存 ChatKeep</Title><Description>本地聊天记录浏览与导出</Description>
-    <Version>0.1.5</Version>
+    <Version>0.1.6</Version>
     <ApplicationIcon>Assets\chat-archive.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>

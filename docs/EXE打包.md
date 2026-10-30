@@ -36,6 +36,18 @@ python -m pip install --target build/python-tools pyinstaller==6.22.3
 
 v0.1.5 批量导出版使用 `./tools/package.ps1 -OutputDirectory dist/preview-0.1.5` 完整重封装。此次读取代码和 HTML 渲染代码有变动，不能使用 `-SkipReader`。正式成品副本位于 `dist/release-v0.1.5/ChatKeep.exe`，与用户确认的测试版字节一致，140692343 字节。旧成品及其缓存均保留；不要将根目录 `dist/ChatKeep.exe` 误当作新版。
 
+## v0.1.6 本地测试版
+
+v0.1.6 圆角群聊与细滚动条本地测试版，仅修改WPF资源及版本号；确认已有读取组件的六个封装模块与当前Python源码一致后，使用 `./tools/package.ps1 -SkipReader -OutputDirectory dist/preview-0.1.6` 生成，保留所有旧成品。
+
+后续追加圆角灰底搜索框与放大镜图标，仍属0.1.6本地预览，使用 `./tools/package.ps1 -SkipReader -OutputDirectory dist/preview-0.1.6-search` 生成独立成品，保留前一份测试版及其用户数据。
+
+会话搜索和选择直接导出追加版位于 `dist/preview-0.1.6-toolbar/ChatKeep.exe`，需要 `./tools/package.ps1 -OutputDirectory dist/preview-0.1.6-toolbar` 完整重封装，不能复用旧读取组件。此前两个0.1.6预览目录及其数据保留。
+
+随后将主窗口最小尺寸调整为960×640、选择按钮收窄且数量仅在右下角显示，最新入口为 `dist/preview-0.1.6-compact/ChatKeep.exe`。此次仅修改界面，确认现有封装的六个读取模块与当前源码一致后，使用 `./tools/package.ps1 -SkipReader -OutputDirectory dist/preview-0.1.6-compact` 重建。保留所有之前的测试版及数据。
+
+v0.1.6正式副本位于 `dist/release-v0.1.6/ChatKeep.exe`，与上述compact测试版字节一致，140704119字节，SHA256为 `48c5d3a55ac061866adf57cc4bdd7daef3272bff14bf3cf3d82b65169789a3a8`。发布同时提供校验文件及依赖许可证压缩包。
+
 ## 2026-10-18验证
 
 - 原有3组自动化测试全部通过。

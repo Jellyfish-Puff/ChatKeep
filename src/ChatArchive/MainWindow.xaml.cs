@@ -8,6 +8,7 @@ using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 
@@ -18,6 +19,9 @@ public partial class MainWindow : Window
     readonly List<Chat> chats = new();
     readonly List<JsonElement> messages = new();
     readonly HashSet<string> selected = new();
+    readonly Dictionary<string,long> selectedTimes = new();
+    string? activeQuery;
+    bool hasOlder=true;
     readonly SemaphoreSlim gate = new(1);
     Process? worker;
     bool busy;
@@ -141,7 +145,9 @@ public partial class MainWindow : Window
     {
         busy=value; ConnectButton.IsEnabled=!value; ChatList.IsEnabled=!value; Search.IsEnabled=!value;
         BatchExportButton.IsEnabled=!value && chats.Count>0;
-        ExportButton.IsEnabled=!value && chat!=null; OlderButton.IsEnabled=!value && messages.Count>0; SelectionMode.IsEnabled=!value;
+        OlderButton.IsEnabled=!value && messages.Count>0 && hasOlder; SelectionMode.IsEnabled=!value && chat!=null;
+        MessageSearch.IsEnabled=!value && chat!=null; ClearMessageSearchButton.IsEnabled=!value && chat!=null;
+        UpdateCount();
         if(notice!=null) Notice.Text=notice;
     }
     async void ConnectClick(object sender,RoutedEventArgs e)
@@ -149,7 +155,7 @@ public partial class MainWindow : Window
         SetBusy(true,"正在连接微信并校验本地数据，请稍候……");
         try
         {
-            var result=await Request(new {action="connect"}); chats.Clear(); messages.Clear(); selected.Clear(); chat=null; MessagePanel.Children.Clear(); ChatTitle.Text="选择一个群聊";
+            var result=await Request(new {action="connect"}); chats.Clear(); messages.Clear(); ResetConversationTools(); chat=null; MessagePanel.Children.Clear(); ChatTitle.Text="选择一个群聊";
             foreach(var item in result.GetProperty("chats").EnumerateArray()) chats.Add(new(item.GetProperty("id").GetString()!,item.GetProperty("name").GetString()!,item.GetProperty("summary").GetString()!));
             Status.Text=result.GetProperty("status").GetString(); GroupCount.Text=$"{chats.Count} 个群聊 · 支持搜索"; ApplySearch();
             Notice.Text="已连接，请选择一个群聊。首次打开会校验消息副本，可能需要一些时间。";
@@ -162,26 +168,58 @@ public partial class MainWindow : Window
     async void ChatChanged(object sender,SelectionChangedEventArgs e)
     {
         if(busy || ChatList.SelectedItem is not Chat item || item.Id==chat) return;
-        chat=item.Id; ChatTitle.Text=item.Name; messages.Clear(); selected.Clear(); RenderMessages();
+        chat=item.Id; ChatTitle.Text=item.Name; messages.Clear(); ResetConversationTools(); RenderMessages();
         await LoadMessages(false);
     }
-    async Task LoadMessages(bool older)
+    void ResetConversationTools()
+    {
+        selected.Clear();selectedTimes.Clear();activeQuery=null;hasOlder=true;
+        SelectionMode.IsChecked=false;MessageSearch.Clear();OlderButton.Content="加载更早的消息";
+    }
+    async Task LoadMessages(bool older,string? query=null,bool replaceQuery=false)
     {
         if(chat==null) return;
-        SetBusy(true,older?"正在加载更早消息……":"正在读取消息……");
+        var requestedQuery=replaceQuery?query:activeQuery;
+        SetBusy(true,requestedQuery!=null?"正在搜索此群聊的本地文字和卡片……":older?"正在加载更早消息……":"正在读取消息……");
         try
         {
             long? before=older && messages.Count>0?messages.Min(m=>m.GetProperty("time").GetInt64()):null;
-            var result=await Request(new {action="messages",chat,before}); var incoming=result.EnumerateArray().Select(m=>m.Clone()).ToList();
-            var ids=messages.Select(m=>m.GetProperty("id").GetString()).ToHashSet(); messages.InsertRange(0,incoming.Where(m=>!ids.Contains(m.GetProperty("id").GetString())));
-            RenderMessages(); Notice.Text=incoming.Count==0?"该范围没有更多消息。":$"已显示 {messages.Count} 条消息。勾选消息可导出所选内容，也可直接按日期导出。";
+            var result=await Request(new {action=requestedQuery==null?"messages":"search",chat,before,query=requestedQuery});
+            var incoming=result.EnumerateArray().Select(m=>m.Clone()).ToList();
+            if(!older) {messages.Clear();activeQuery=requestedQuery;}
+            var ids=messages.Select(m=>m.GetProperty("id").GetString()).ToHashSet();messages.InsertRange(0,incoming.Where(m=>!ids.Contains(m.GetProperty("id").GetString())));
+            hasOlder=incoming.Count>0;OlderButton.Content=activeQuery!=null?"加载更早的匹配消息":"加载更早的消息";
+            RenderMessages();
+            Notice.Text=activeQuery!=null
+                ?messages.Count==0?"没有找到匹配的本地文字或卡片消息。":$"已显示 {messages.Count} 条匹配消息，可勾选导出；清空搜索返回聊天。"+(incoming.Count==0?"没有更早的匹配消息。":"")
+                :incoming.Count==0?"该范围没有更多消息。":$"已显示 {messages.Count} 条消息。点击“选择”勾选导出，也可直接按日期导出。";
             if(!older) MessagesScroll.ScrollToBottom();
         }
-        catch(Exception ex) { ShowError(ex); }
-        finally { SetBusy(false); }
+        catch(Exception ex) {ShowError(ex);}
+        finally {SetBusy(false);}
     }
+    async void MessageSearchKeyDown(object sender,KeyEventArgs e)
+    {
+        if(busy || chat==null) return;
+        if(e.Key==Key.Escape) {e.Handled=true;MessageSearch.Clear();}
+        else if(e.Key==Key.Enter)
+        {
+            e.Handled=true;var query=MessageSearch.Text.Trim();
+            await LoadMessages(false,query.Length>0?query:null,true);
+        }
+    }
+    async void MessageSearchTextChanged(object sender,TextChangedEventArgs e)
+    {
+        if(MessageSearch!=null && !busy && chat!=null && activeQuery!=null && string.IsNullOrWhiteSpace(MessageSearch.Text))
+            await LoadMessages(false,null,true);
+    }
+    void ClearMessageSearch(object sender,RoutedEventArgs e) {if(!busy) MessageSearch.Clear();}
     async void OlderClick(object sender,RoutedEventArgs e) => await LoadMessages(true);
-    void SelectionChanged(object sender,RoutedEventArgs e) { RenderMessages(); }
+    void SelectionChanged(object sender,RoutedEventArgs e)
+    {
+        if(SelectionMode.IsChecked!=true) {selected.Clear();selectedTimes.Clear();}
+        RenderMessages();
+    }
     void RenderMessages()
     {
         MessagePanel.Children.Clear();
@@ -191,7 +229,7 @@ public partial class MainWindow : Window
             var line=new Grid {Margin=new Thickness(0,10,0,10)}; line.ColumnDefinitions.Add(new(){Width=GridLength.Auto}); line.ColumnDefinitions.Add(new());
             var check=new CheckBox {IsChecked=selected.Contains(id),Visibility=SelectionMode.IsChecked==true?Visibility.Visible:Visibility.Collapsed,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,12,0)};
             System.Windows.Automation.AutomationProperties.SetName(check,"选择这条消息");
-            check.Checked+=(_,_)=>{selected.Add(id);UpdateCount();}; check.Unchecked+=(_,_)=>{selected.Remove(id);UpdateCount();}; line.Children.Add(check);
+            check.Checked+=(_,_)=>{selected.Add(id);selectedTimes[id]=message.GetProperty("time").GetInt64();UpdateCount();}; check.Unchecked+=(_,_)=>{selected.Remove(id);selectedTimes.Remove(id);UpdateCount();}; line.Children.Add(check);
             var stack=new StackPanel {HorizontalAlignment=self?HorizontalAlignment.Right:HorizontalAlignment.Left,MaxWidth=570}; Grid.SetColumn(stack,1); line.Children.Add(stack);
             stack.Children.Add(new TextBlock {Text=message.GetProperty("sender").GetString()+" · "+DateTimeOffset.FromUnixTimeSeconds(message.GetProperty("time").GetInt64()).ToLocalTime().ToString("MM-dd HH:mm"),Foreground=new SolidColorBrush(Color.FromRgb(82,102,91)),FontSize=12,Margin=new Thickness(0,0,0,6)});
             UIElement body;
@@ -224,7 +262,25 @@ public partial class MainWindow : Window
         }
         UpdateCount();
     }
-    void UpdateCount() => SelectionCount.Text=selected.Count==0?"未选择消息":$"已选择 {selected.Count} 条消息";
+    void UpdateCount()
+    {
+        SelectionCount.Text=selected.Count==0?"未选择消息":$"已选择 {selected.Count} 条消息";
+        var selecting=SelectionMode.IsChecked==true;
+        SelectionMode.Content=selecting?"选择中":"选择";
+        ExportButton.IsEnabled=!busy && chat!=null && (!selecting || selected.Count>0);
+        ExportButton.ToolTip=selecting?selected.Count>0?"直接导出已勾选的消息":"请先勾选消息":"按日期范围导出此群聊";
+    }
+    (DateTime Start,DateTime End) SelectedTimeRange()
+    {
+        if(selected.Count==0 || selected.Any(id=>!selectedTimes.ContainsKey(id))) throw new InvalidOperationException("请重新勾选要导出的消息。");
+        var times=selected.Select(id=>selectedTimes[id]).ToArray();
+        return (DateTimeOffset.FromUnixTimeSeconds(times.Min()).LocalDateTime.Date,DateTimeOffset.FromUnixTimeSeconds(times.Max()).LocalDateTime.Date);
+    }
+    object SelectedExportRequest(string path)
+    {
+        var range=SelectedTimeRange();
+        return new {action="export",chat,start=range.Start.ToString("yyyy-MM-dd"),end=range.End.ToString("yyyy-MM-dd"),selected=selected.ToArray(),path};
+    }
     void ShowFullImage(string uri)
     {
         try
@@ -237,19 +293,24 @@ public partial class MainWindow : Window
     }
     async void ExportClick(object sender,RoutedEventArgs e)
     {
-        if(chat==null) return;
-        var chosen=messages.Where(m=>selected.Contains(m.GetProperty("id").GetString()!)).ToList();
-        DateTime? selectedStart=chosen.Count>0?DateTimeOffset.FromUnixTimeSeconds(chosen.Min(m=>m.GetProperty("time").GetInt64())).LocalDateTime.Date:null;
-        DateTime? selectedEnd=chosen.Count>0?DateTimeOffset.FromUnixTimeSeconds(chosen.Max(m=>m.GetProperty("time").GetInt64())).LocalDateTime.Date:null;
-        var dialog=new ExportWindow(selected.Count,selectedStart,selectedEnd) {Owner=this}; if(dialog.ShowDialog()!=true) return;
-        string folder=Path.Combine(root,"exports"); Directory.CreateDirectory(folder);
-        var safe=string.Concat(ChatTitle.Text.Select(c=>Path.GetInvalidFileNameChars().Contains(c)?'_':c));
-        var picker=new SaveFileDialog {Filter="HTML 聊天记录 (*.html)|*.html",InitialDirectory=folder,FileName=$"{safe}_{dialog.StartDate:yyyyMMdd}_{dialog.EndDate:yyyyMMdd}.html",AddExtension=true,DefaultExt=".html"};
-        if(picker.ShowDialog(this)!=true) return;
-        SetBusy(true,"正在导出文字和本地图片，请稍候……");
+        if(chat==null || busy || (SelectionMode.IsChecked==true && selected.Count==0)) return;
         try
         {
-            var result=await Request(new {action="export",chat,start=dialog.StartDate.ToString("yyyy-MM-dd"),end=dialog.EndDate.ToString("yyyy-MM-dd"),selected=dialog.OnlySelected?selected.ToArray():null,path=picker.FileName});
+            var selecting=SelectionMode.IsChecked==true;
+            DateTime start,end;
+            if(selecting) (start,end)=SelectedTimeRange();
+            else
+            {
+                var dialog=new ExportWindow(0) {Owner=this};if(dialog.ShowDialog()!=true) return;
+                start=dialog.StartDate;end=dialog.EndDate;
+            }
+            var folder=Path.Combine(root,"exports");Directory.CreateDirectory(folder);
+            var safe=string.Concat(ChatTitle.Text.Select(c=>Path.GetInvalidFileNameChars().Contains(c)?'_':c));
+            var picker=new SaveFileDialog {Filter="HTML 聊天记录 (*.html)|*.html",InitialDirectory=folder,FileName=$"{safe}_{start:yyyyMMdd}_{end:yyyyMMdd}.html",AddExtension=true,DefaultExt=".html"};
+            if(picker.ShowDialog(this)!=true) return;
+            SetBusy(true,"正在导出文字和本地图片，请稍候……");
+            var request=selecting?SelectedExportRequest(picker.FileName):new {action="export",chat,start=start.ToString("yyyy-MM-dd"),end=end.ToString("yyyy-MM-dd"),path=picker.FileName};
+            var result=await Request(request);
             var count=result.GetProperty("count").GetInt32();var missing=result.GetProperty("missingImages").GetInt32();
             var thumbnails=result.GetProperty("thumbnailImages").GetInt32();
             Notice.Text=$"已导出 {count} 条消息，图片已嵌入 HTML。"+(thumbnails>0?$"{thumbnails} 张使用缩略图，文件内已标注。":"")+(missing>0?$"{missing} 张图片缺失或无法解码。":"");

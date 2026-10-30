@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Threading;
 using System.Windows.Media;
 using ChatArchive;
@@ -20,7 +21,7 @@ class Program
         var messages=(List<JsonElement>)typeof(MainWindow).GetField("messages",flags)!.GetValue(window)!;
         var render=typeof(MainWindow).GetMethod("RenderMessages",flags)!;
         var scroll=(ScrollViewer)window.FindName("MessagesScroll");
-        var selection=(CheckBox)window.FindName("SelectionMode");
+        var selection=(ToggleButton)window.FindName("SelectionMode");
         window.Loaded+=async (_,_)=>
         {
             try
@@ -30,7 +31,7 @@ class Program
                     messages.Clear();messages.AddRange(payload);
                     selection.IsChecked=cycle%2==1;
                     render.Invoke(window,null);
-                    window.Width=cycle%2==0?1380:1024;
+                    window.Width=cycle%2==0?1380:window.MinWidth;
                     window.Height=cycle%2==0?900:640;
                     window.UpdateLayout();scroll.ScrollToBottom();
                     await window.Dispatcher.InvokeAsync(()=>{},DispatcherPriority.ApplicationIdle);
@@ -53,7 +54,9 @@ class Program
                 }
                 var viewerCases=await ImageViewerChecks.Run(window,args.FirstOrDefault());
                 var batchCases=await BatchExportChecks.Run(window,args.FirstOrDefault());
-                Console.WriteLine(JsonSerializer.Serialize(new {ok=true,messages=payload.Count,cycles=6,viewerCases,batchCases}));
+                var scrollCases=await ScrollStyleChecks.Run(window,args.FirstOrDefault());
+                var toolbarCases=await ToolbarChecks.Run(window,args.FirstOrDefault());
+                Console.WriteLine(JsonSerializer.Serialize(new {ok=true,messages=payload.Count,cycles=6,viewerCases,batchCases,scrollCases,toolbarCases}));
                 window.Close();Dispatcher.CurrentDispatcher.BeginInvokeShutdown(DispatcherPriority.Background);
             }
             catch(Exception ex)
