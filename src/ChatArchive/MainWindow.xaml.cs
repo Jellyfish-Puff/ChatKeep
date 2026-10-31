@@ -226,10 +226,11 @@ public partial class MainWindow : Window
         foreach(var message in messages)
         {
             var id=message.GetProperty("id").GetString()!; var self=message.GetProperty("self").GetBoolean();
-            var line=new Grid {Margin=new Thickness(0,10,0,10)}; line.ColumnDefinitions.Add(new(){Width=GridLength.Auto}); line.ColumnDefinitions.Add(new());
+            var selecting=SelectionMode.IsChecked==true;
+            var line=new Grid {Margin=new Thickness(0,10,0,10),Background=Brushes.Transparent,Cursor=selecting?Cursors.Hand:null}; line.ColumnDefinitions.Add(new(){Width=GridLength.Auto}); line.ColumnDefinitions.Add(new());
             var check=new CheckBox {IsChecked=selected.Contains(id),Visibility=SelectionMode.IsChecked==true?Visibility.Visible:Visibility.Collapsed,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,12,0)};
             System.Windows.Automation.AutomationProperties.SetName(check,"选择这条消息");
-            check.Checked+=(_,_)=>{selected.Add(id);selectedTimes[id]=message.GetProperty("time").GetInt64();UpdateCount();}; check.Unchecked+=(_,_)=>{selected.Remove(id);selectedTimes.Remove(id);UpdateCount();}; line.Children.Add(check);
+            line.Children.Add(check);
             var stack=new StackPanel {HorizontalAlignment=self?HorizontalAlignment.Right:HorizontalAlignment.Left,MaxWidth=570}; Grid.SetColumn(stack,1); line.Children.Add(stack);
             stack.Children.Add(new TextBlock {Text=message.GetProperty("sender").GetString()+" · "+DateTimeOffset.FromUnixTimeSeconds(message.GetProperty("time").GetInt64()).ToLocalTime().ToString("MM-dd HH:mm"),Foreground=new SolidColorBrush(Color.FromRgb(82,102,91)),FontSize=12,Margin=new Thickness(0,0,0,6)});
             UIElement body;
@@ -254,10 +255,25 @@ public partial class MainWindow : Window
                 // Font fallback for keycap emoji can make WPF measure/render disagree,
                 // terminating the process. Prefer the installed emoji font explicitly.
                 if(content.Text.Contains('\u20e3')) content.FontFamily=new FontFamily("Segoe UI Emoji, Microsoft YaHei UI");
-                System.Windows.Automation.AutomationProperties.SetName(content,"消息内容，可选择并复制");
+                content.Cursor=selecting?Cursors.Hand:Cursors.IBeam;
+                System.Windows.Automation.AutomationProperties.SetName(content,selecting?"消息内容，点击切换勾选":"消息内容，可选择并复制");
                 body=content;
             }
-            stack.Children.Add(new Border {Child=body,Background=new SolidColorBrush((Color)ColorConverter.ConvertFromString(self?"#D9F2DC":"#FFFFFF")),CornerRadius=new CornerRadius(8),Padding=new Thickness(14,10,14,10)});
+            var bubble=new Border {Child=body,Background=new SolidColorBrush((Color)ColorConverter.ConvertFromString(self?"#D9F2DC":"#FFFFFF")),CornerRadius=new CornerRadius(10),BorderThickness=new Thickness(2),BorderBrush=selected.Contains(id)?new SolidColorBrush(Color.FromRgb(16,185,110)):Brushes.Transparent,Padding=new Thickness(12,8,12,8)};
+            stack.Children.Add(bubble);
+            check.Checked+=(_,_)=>{selected.Add(id);selectedTimes[id]=message.GetProperty("time").GetInt64();bubble.BorderBrush=new SolidColorBrush(Color.FromRgb(16,185,110));UpdateCount();};
+            check.Unchecked+=(_,_)=>{selected.Remove(id);selectedTimes.Remove(id);bubble.BorderBrush=Brushes.Transparent;UpdateCount();};
+            line.PreviewMouseDown+=(_,e)=>
+            {
+                if(e.ChangedButton!=MouseButton.Left || !selecting || busy) return;
+                // Let native checkboxes and image-view buttons handle their own click once.
+                for(var source=e.OriginalSource as DependencyObject;source!=null && source!=line;)
+                {
+                    if(source is System.Windows.Controls.Primitives.ButtonBase) return;
+                    source=source is Visual?VisualTreeHelper.GetParent(source):LogicalTreeHelper.GetParent(source);
+                }
+                check.IsChecked=check.IsChecked!=true;e.Handled=true;
+            };
             MessagePanel.Children.Add(line);
         }
         UpdateCount();
@@ -268,7 +284,7 @@ public partial class MainWindow : Window
         var selecting=SelectionMode.IsChecked==true;
         SelectionMode.Content=selecting?"选择中":"选择";
         ExportButton.IsEnabled=!busy && chat!=null && (!selecting || selected.Count>0);
-        ExportButton.ToolTip=selecting?selected.Count>0?"直接导出已勾选的消息":"请先勾选消息":"按日期范围导出此群聊";
+        ExportButton.ToolTip=selecting?selected.Count>0?"设置并导出已勾选的消息":"请先勾选消息":"设置导出日期、内容和格式";
     }
     (DateTime Start,DateTime End) SelectedTimeRange()
     {
@@ -276,10 +292,14 @@ public partial class MainWindow : Window
         var times=selected.Select(id=>selectedTimes[id]).ToArray();
         return (DateTimeOffset.FromUnixTimeSeconds(times.Min()).LocalDateTime.Date,DateTimeOffset.FromUnixTimeSeconds(times.Max()).LocalDateTime.Date);
     }
-    object SelectedExportRequest(string path)
+    ExportWindow CreateExportDialog()
     {
-        var range=SelectedTimeRange();
-        return new {action="export",chat,start=range.Start.ToString("yyyy-MM-dd"),end=range.End.ToString("yyyy-MM-dd"),selected=selected.ToArray(),path};
+        var range=selected.Count>0?SelectedTimeRange():((DateTime Start,DateTime End)?)null;
+        return new ExportWindow(selected.Count,range?.Start,range?.End,ChatTitle.Text,messages.Count) {Owner=this};
+    }
+    object ExportRequest(ExportWindow dialog,string path)
+    {
+        return new {action="export",chat,start=dialog.StartDate.ToString("yyyy-MM-dd"),end=dialog.EndDate.ToString("yyyy-MM-dd"),selected=dialog.OnlySelected?selected.ToArray():null,path};
     }
     void ShowFullImage(string uri)
     {
@@ -296,21 +316,14 @@ public partial class MainWindow : Window
         if(chat==null || busy || (SelectionMode.IsChecked==true && selected.Count==0)) return;
         try
         {
-            var selecting=SelectionMode.IsChecked==true;
-            DateTime start,end;
-            if(selecting) (start,end)=SelectedTimeRange();
-            else
-            {
-                var dialog=new ExportWindow(0) {Owner=this};if(dialog.ShowDialog()!=true) return;
-                start=dialog.StartDate;end=dialog.EndDate;
-            }
+            var dialog=CreateExportDialog();if(dialog.ShowDialog()!=true) return;
+            var start=dialog.StartDate;var end=dialog.EndDate;
             var folder=Path.Combine(root,"exports");Directory.CreateDirectory(folder);
             var safe=string.Concat(ChatTitle.Text.Select(c=>Path.GetInvalidFileNameChars().Contains(c)?'_':c));
             var picker=new SaveFileDialog {Filter="HTML 聊天记录 (*.html)|*.html",InitialDirectory=folder,FileName=$"{safe}_{start:yyyyMMdd}_{end:yyyyMMdd}.html",AddExtension=true,DefaultExt=".html"};
             if(picker.ShowDialog(this)!=true) return;
             SetBusy(true,"正在导出文字和本地图片，请稍候……");
-            var request=selecting?SelectedExportRequest(picker.FileName):new {action="export",chat,start=start.ToString("yyyy-MM-dd"),end=end.ToString("yyyy-MM-dd"),path=picker.FileName};
-            var result=await Request(request);
+            var result=await Request(ExportRequest(dialog,picker.FileName));
             var count=result.GetProperty("count").GetInt32();var missing=result.GetProperty("missingImages").GetInt32();
             var thumbnails=result.GetProperty("thumbnailImages").GetInt32();
             Notice.Text=$"已导出 {count} 条消息，图片已嵌入 HTML。"+(thumbnails>0?$"{thumbnails} 张使用缩略图，文件内已标注。":"")+(missing>0?$"{missing} 张图片缺失或无法解码。":"");

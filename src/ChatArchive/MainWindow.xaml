@@ -25,8 +25,8 @@
               <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Setter Property="Visibility" Value="Visible"/><Style.Triggers><DataTrigger Binding="{Binding Text, ElementName=MessageSearch}" Value=""><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></Button.Style>
             </Button>
           </Grid>
-          <ToggleButton x:Name="SelectionMode" Grid.Column="1" Content="选择" Style="{StaticResource SelectionToggle}" Margin="0,0,8,0" IsEnabled="False" Click="SelectionChanged" ToolTip="进入选择模式；再次点击退出并清空勾选"/>
-          <Button x:Name="ExportButton" Grid.Column="2" Content="导出 HTML" Width="100" Height="36" Margin="0" Padding="12,0" Click="ExportClick" IsEnabled="False"/>
+          <ToggleButton x:Name="SelectionMode" Grid.Column="1" Content="选择" Style="{StaticResource SelectionToggle}" Margin="0,0,8,0" IsEnabled="False" Click="SelectionChanged" ToolTip="进入后可点击消息整行勾选；再次点击退出并清空选择"/>
+          <Button x:Name="ExportButton" Grid.Column="2" Content="导出" Width="72" Height="36" Margin="0" Padding="12,0" Click="ExportClick" IsEnabled="False"/>
         </Grid>
       </Grid>
     </Border>

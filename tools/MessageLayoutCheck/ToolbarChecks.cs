@@ -8,6 +8,9 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using System.Windows.Input;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using ChatArchive;
 
 static class ToolbarChecks
@@ -66,6 +69,8 @@ static class ToolbarChecks
             var load = typeof(MainWindow).GetMethod("LoadMessages", Flags)!;
             await ((Task)load.Invoke(window, new object?[] { false, null, true })!).WaitAsync(TimeSpan.FromSeconds(10));
             Require(export.IsEnabled && toggle.Content.Equals("选择"), "Normal date export should remain available");
+            Require(export.Content.Equals("导出"), "Toolbar should use the general export label");
+            Require(!ClickRow(Descendants(panel).OfType<TextBox>().First()), "Normal browsing should preserve text mouse selection");
             foreach (var width in new[] { 1380d, 1100d, 960d })
             {
                 window.Width = width; window.Height = width == 1380 ? 900 : 640; await Settle(window);
@@ -76,7 +81,7 @@ static class ToolbarChecks
                 Require(titleBounds.Right < toolsBounds.Left, "Long group name overlaps toolbar");
                 Require(title.ActualWidth >= 80, "Group title has no readable space at minimum width");
                 Require(toolsBounds.Right < window.ActualWidth && toolsBounds.Height <= 40, "Toolbar wraps or clips");
-                Require(search.ActualWidth >= 191 && toggle.ActualWidth == 72, "Search or selection control is too narrow");
+                Require(search.ActualWidth >= 191 && toggle.ActualWidth == 72 && export.ActualWidth == toggle.ActualWidth, "Search is too narrow or selection/export buttons have different widths");
                 var childBounds = toolbar.Children.OfType<FrameworkElement>().Select(control => control.TransformToAncestor(window).TransformBounds(new Rect(new Point(), control.RenderSize))).ToArray();
                 for (var i = 1; i < childBounds.Length; i++)
                     Require(childBounds[i - 1].Right <= childBounds[i].Left && Math.Abs(childBounds[i].Top - childBounds[0].Top) < 1, "Toolbar controls overlap or leave single row");
@@ -86,20 +91,38 @@ static class ToolbarChecks
             }
             toggle.IsChecked = true; toggle.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
             Require(!export.IsEnabled && toggle.Content.Equals("选择中"), "Selection mode should show a plain label and disable empty export");
-            Descendants(panel).OfType<CheckBox>().First().IsChecked = true;
+            var firstRow = (Grid)panel.Children[0];
+            var firstCheck = Descendants(firstRow).OfType<CheckBox>().Single();
+            var firstText = Descendants(firstRow).OfType<TextBox>().Single();
+            var firstBubble = (Border)((StackPanel)firstRow.Children[1]).Children[1];
+            Require(ClickRow(firstText) && firstCheck.IsChecked == true, "Clicking message text should select the row");
+            Require(((SolidColorBrush)firstBubble.BorderBrush).Color.A == 255 && firstBubble.BorderThickness.Left == 2, "Selected bubble has no visible border");
+            Require(ClickRow(firstRow) && firstCheck.IsChecked == false && ((SolidColorBrush)firstBubble.BorderBrush).Color.A == 0, "Clicking row whitespace should deselect and clear border");
+            Require(!ClickRow(firstCheck), "Row handler consumes native checkbox click");
+            ((IToggleProvider)new ToggleButtonAutomationPeer(firstCheck).GetPattern(PatternInterface.Toggle)).Toggle();
             Require(export.IsEnabled && count.Text.Contains("1") && toggle.Content.Equals("选择中"), "Checking a message did not update footer count or kept count in button");
             search.Text = "摄影";
             await ((Task)load.Invoke(window, new object?[] { false, "摄影", true })!).WaitAsync(TimeSpan.FromSeconds(10));
             Require(messages.Single().GetProperty("id").GetString() == "synthetic:3", "Search did not display reader results");
             Require(count.Text.Contains("1") && toggle.Content.Equals("选择中"), "Search discarded a hidden checked message");
             Descendants(panel).OfType<CheckBox>().Single().IsChecked = true;
-            using var request = JsonDocument.Parse(JsonSerializer.Serialize(typeof(MainWindow).GetMethod("SelectedExportRequest", Flags)!.Invoke(window, new object[] { "synthetic.html" })));
+            var settings = (ExportWindow)typeof(MainWindow).GetMethod("CreateExportDialog", Flags)!.Invoke(window, null)!;
+            Require(settings.OnlySelected, "Export dialog should default to checked messages");
+            using var request = JsonDocument.Parse(JsonSerializer.Serialize(typeof(MainWindow).GetMethod("ExportRequest", Flags)!.Invoke(window, new object[] { settings, "synthetic.html" })));
             var ids = request.RootElement.GetProperty("selected").EnumerateArray().Select(x => x.GetString()).ToHashSet();
             Require(ids.SetEquals(new[] { "synthetic:1", "synthetic:3" }), "Direct export lost selections outside search view");
             var expectedFirst = DateTimeOffset.FromUnixTimeSeconds(fixtures[0].time).LocalDateTime.ToString("yyyy-MM-dd");
             var expectedLast = DateTimeOffset.FromUnixTimeSeconds(fixtures[2].time).LocalDateTime.ToString("yyyy-MM-dd");
             Require(request.RootElement.GetProperty("start").GetString() == expectedFirst && request.RootElement.GetProperty("end").GetString() == expectedLast, "Direct export does not cover all selected dates");
             Require(!request.RootElement.TryGetProperty("query", out _), "Direct export mistakenly reapplies visible search filter");
+            ((DatePicker)settings.FindName("StartPicker")).SelectedDate=new DateTime(2026,10,30);
+            ((DatePicker)settings.FindName("EndPicker")).SelectedDate=new DateTime(2026,10,30);
+            using var changedDates = JsonDocument.Parse(JsonSerializer.Serialize(typeof(MainWindow).GetMethod("ExportRequest", Flags)!.Invoke(window, new object[] { settings, "synthetic.html" })));
+            Require(changedDates.RootElement.GetProperty("start").GetString()=="2026-10-30" && changedDates.RootElement.GetProperty("end").GetString()=="2026-10-30", "Export request ignores edited dialog dates");
+            ((ComboBox)settings.FindName("ContentPicker")).SelectedIndex = 0;
+            using var allRequest = JsonDocument.Parse(JsonSerializer.Serialize(typeof(MainWindow).GetMethod("ExportRequest", Flags)!.Invoke(window, new object[] { settings, "synthetic.html" })));
+            Require(allRequest.RootElement.GetProperty("selected").ValueKind == JsonValueKind.Null, "All-record export still filters by selected IDs");
+            settings.Close();
             Require(count.Text.Contains("2") && toggle.Content.Equals("选择中"), "Selection count must stay in footer only");
             window.Width = 960; window.Height = 640; await Settle(window);
             if (screenshots != null) Save(window, Path.Combine(screenshots, "message-toolbar-selecting.png"));
@@ -124,6 +147,11 @@ static class ToolbarChecks
             messages.Clear(); panel.Children.Clear(); chats.Clear(); chatField.SetValue(window, null);
             busyField.SetValue(window, false);
         }
+    }
+    static bool ClickRow(UIElement source)
+    {
+        var e = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = Mouse.PreviewMouseDownEvent };
+        source.RaiseEvent(e); return e.Handled;
     }
     static void Save(Window window, string path)
     {

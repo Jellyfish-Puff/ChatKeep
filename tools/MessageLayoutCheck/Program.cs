@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Threading;
 using System.Windows.Media;
+using System.Windows.Input;
 using ChatArchive;
 
 // Payload enters through stdin only. Never log text, identifiers, or image bytes.
@@ -42,6 +43,12 @@ class Program
                     if(!textBoxes.Select(t=>t.Text).SequenceEqual(expected)) throw new InvalidOperationException("Text changed during display");
                     int expectedButtons=payload.Count(m=>m.GetProperty("image").ValueKind==JsonValueKind.String && m.TryGetProperty("imageQuality",out var q) && q.GetString() is "image" or "large");
                     if(Descendants(panel).OfType<Button>().Count(b=>Equals(b.Content,"查看大图"))!=expectedButtons) throw new InvalidOperationException("Image quality buttons incorrect");
+                    foreach(var view in Descendants(panel).OfType<Button>())
+                    {
+                        var click=new MouseButtonEventArgs(Mouse.PrimaryDevice,Environment.TickCount,MouseButton.Left) {RoutedEvent=Mouse.PreviewMouseDownEvent};
+                        view.RaiseEvent(click);
+                        if(click.Handled) throw new InvalidOperationException("Selection row consumes image-view button click");
+                    }
                     foreach(var textBox in textBoxes)
                     {
                         textBox.SelectAll();
@@ -56,7 +63,8 @@ class Program
                 var batchCases=await BatchExportChecks.Run(window,args.FirstOrDefault());
                 var scrollCases=await ScrollStyleChecks.Run(window,args.FirstOrDefault());
                 var toolbarCases=await ToolbarChecks.Run(window,args.FirstOrDefault());
-                Console.WriteLine(JsonSerializer.Serialize(new {ok=true,messages=payload.Count,cycles=6,viewerCases,batchCases,scrollCases,toolbarCases}));
+                var exportDialogCases=await ExportDialogChecks.Run(window,args.FirstOrDefault());
+                Console.WriteLine(JsonSerializer.Serialize(new {ok=true,messages=payload.Count,cycles=6,viewerCases,batchCases,scrollCases,toolbarCases,exportDialogCases}));
                 window.Close();Dispatcher.CurrentDispatcher.BeginInvokeShutdown(DispatcherPriority.Background);
             }
             catch(Exception ex)

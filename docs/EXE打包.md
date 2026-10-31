@@ -48,6 +48,14 @@ v0.1.6 圆角群聊与细滚动条本地测试版，仅修改WPF资源及版本�
 
 v0.1.6正式副本位于 `dist/release-v0.1.6/ChatKeep.exe`，与上述compact测试版字节一致，140704119字节，SHA256为 `48c5d3a55ac061866adf57cc4bdd7daef3272bff14bf3cf3d82b65169789a3a8`。发布同时提供校验文件及依赖许可证压缩包。
 
+## v0.1.7 本地测试版
+
+消息绿色边框、整行勾选及新版导出窗口仅修改WPF桌面代码。确认现有读取EXE的六个模块与当前Python源码一致后，使用 `./tools/package.ps1 -SkipReader -OutputDirectory dist/preview-0.1.7` 重建。保留全部旧版和数据；本地版本不自动公开发布。
+
+按钮等宽追加版使用 `./tools/package.ps1 -SkipReader -OutputDirectory dist/preview-0.1.7-buttons`，选择与导出按钮均为72像素宽。最新入口为此独立目录，原preview-0.1.7及其数据保留。
+
+v0.1.7正式副本位于 `dist/release-v0.1.7/ChatKeep.exe`，与按钮等宽测试版逐字节一致，140712311字节，SHA256为 `3265bde02f759d5782322443a48199966ff96779899a730e5b05f50dbac381d3`。发布同步提供校验文件与依赖许可证压缩包。
+
 ## 2026-10-18验证
 
 - 原有3组自动化测试全部通过。
