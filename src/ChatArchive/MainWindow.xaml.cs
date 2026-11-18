@@ -13,7 +13,10 @@ using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 
 namespace ChatArchive;
-public record Chat(string Id, string Name, string Summary);
+public record Chat(string Id, string Name, string Summary, bool IsGroup=true)
+{
+    public string Badge => IsGroup ? "群" : "友";
+}
 public partial class MainWindow : Window
 {
     readonly List<Chat> chats = new();
@@ -25,6 +28,9 @@ public partial class MainWindow : Window
     readonly SemaphoreSlim gate = new(1);
     Process? worker;
     bool busy;
+    bool showingFriends;
+    string ConversationLabel => showingFriends ? "好友" : "群聊";
+    List<Chat> CategoryChats => chats.Where(c=>c.IsGroup!=showingFriends).ToList();
     string? chat;
     readonly string root;
     readonly bool packaged;
@@ -144,7 +150,8 @@ public partial class MainWindow : Window
     void SetBusy(bool value, string? notice=null)
     {
         busy=value; ConnectButton.IsEnabled=!value; ChatList.IsEnabled=!value; Search.IsEnabled=!value;
-        BatchExportButton.IsEnabled=!value && chats.Count>0;
+        GroupChatsMenu.IsEnabled=!value; FriendChatsMenu.IsEnabled=!value;
+        BatchExportButton.IsEnabled=!value && CategoryChats.Count>0;
         OlderButton.IsEnabled=!value && messages.Count>0 && hasOlder; SelectionMode.IsEnabled=!value && chat!=null;
         MessageSearch.IsEnabled=!value && chat!=null; ClearMessageSearchButton.IsEnabled=!value && chat!=null;
         UpdateCount();
@@ -155,16 +162,39 @@ public partial class MainWindow : Window
         SetBusy(true,"正在连接微信并校验本地数据，请稍候……");
         try
         {
-            var result=await Request(new {action="connect"}); chats.Clear(); messages.Clear(); ResetConversationTools(); chat=null; MessagePanel.Children.Clear(); ChatTitle.Text="选择一个群聊";
-            foreach(var item in result.GetProperty("chats").EnumerateArray()) chats.Add(new(item.GetProperty("id").GetString()!,item.GetProperty("name").GetString()!,item.GetProperty("summary").GetString()!));
-            Status.Text=result.GetProperty("status").GetString(); GroupCount.Text=$"{chats.Count} 个群聊 · 支持搜索"; ApplySearch();
-            Notice.Text="已连接，请选择一个群聊。首次打开会校验消息副本，可能需要一些时间。";
+            var result=await Request(new {action="connect"}); chats.Clear(); ClearConversation();
+            foreach(var item in result.GetProperty("chats").EnumerateArray()) chats.Add(new(item.GetProperty("id").GetString()!,item.GetProperty("name").GetString()!,item.GetProperty("summary").GetString()!,!item.TryGetProperty("kind",out var kind) || kind.GetString()=="group"));
+            Status.Text=result.GetProperty("status").GetString(); ApplySearch();
+            Notice.Text=$"已连接，请选择一个{ConversationLabel}。首次打开会校验消息副本，可能需要一些时间。";
         }
         catch(Exception ex) { ShowError(ex); }
         finally { SetBusy(false); }
     }
     void SearchChanged(object sender,TextChangedEventArgs e) { if(ChatList!=null) ApplySearch(); }
-    void ApplySearch() => ChatList.ItemsSource=chats.Where(c=>c.Name.Contains(Search.Text,StringComparison.CurrentCultureIgnoreCase)).ToList();
+    void ApplySearch()
+    {
+        var category=CategoryChats;
+        ChatList.ItemsSource=category.Where(c=>c.Name.Contains(Search.Text,StringComparison.CurrentCultureIgnoreCase)).ToList();
+        GroupCount.Text=$"{category.Count} 个{ConversationLabel}会话 · 支持搜索";
+        BatchExportButton.IsEnabled=!busy && category.Count>0;
+    }
+    void ClearConversation()
+    {
+        chat=null; messages.Clear(); ResetConversationTools(); MessagePanel.Children.Clear();
+        ChatTitle.Text=$"选择一个{ConversationLabel}"; UpdateCount();
+    }
+    void ConversationCategoryClick(object sender,RoutedEventArgs e)
+    {
+        if(busy) return;
+        var friends=ReferenceEquals(sender,FriendChatsMenu);
+        if(showingFriends==friends) return;
+        showingFriends=friends;
+        ClearConversation(); Search.Clear();
+        ConversationHeading.Text=showingFriends?"好友":"群聊";
+        Search.Tag=$"搜索{ConversationLabel}"; Search.ToolTip=Search.Tag;
+        System.Windows.Automation.AutomationProperties.SetName(Search,$"搜索{ConversationLabel}");
+        ApplySearch(); SetBusy(false,chats.Count==0?"连接微信后，在中间列表选择聊天。":$"请选择一个{ConversationLabel}，可按日期或勾选导出消息。");
+    }
     async void ChatChanged(object sender,SelectionChangedEventArgs e)
     {
         if(busy || ChatList.SelectedItem is not Chat item || item.Id==chat) return;
@@ -180,7 +210,7 @@ public partial class MainWindow : Window
     {
         if(chat==null) return;
         var requestedQuery=replaceQuery?query:activeQuery;
-        SetBusy(true,requestedQuery!=null?"正在搜索此群聊的本地文字和卡片……":older?"正在加载更早消息……":"正在读取消息……");
+        SetBusy(true,requestedQuery!=null?"正在搜索此聊天的本地文字和卡片……":older?"正在加载更早消息……":"正在读取消息……");
         try
         {
             long? before=older && messages.Count>0?messages.Min(m=>m.GetProperty("time").GetInt64()):null;
@@ -334,12 +364,12 @@ public partial class MainWindow : Window
     }
     async void BatchExportClick(object sender,RoutedEventArgs e)
     {
-        if(busy || chats.Count==0) return;
+        if(busy || CategoryChats.Count==0) return;
         try
         {
             var folder=Path.Combine(root,"exports");Directory.CreateDirectory(folder);
-            var preferencesPath=Path.Combine(root,"private","batch-export.json");
-            var dialog=new BatchExportWindow(chats,BatchExportPreferences.Load(preferencesPath),folder) {Owner=this};
+            var preferencesPath=Path.Combine(root,"private",showingFriends?"batch-export-friends.json":"batch-export.json");
+            var dialog=new BatchExportWindow(CategoryChats,BatchExportPreferences.Load(preferencesPath),folder,ConversationLabel) {Owner=this};
             if(dialog.ShowDialog()!=true) return;
             var warning="";
             try { new BatchExportPreferences {Chats=dialog.SelectedChats,Mode=dialog.Mode}.Save(preferencesPath); }
@@ -347,10 +377,10 @@ public partial class MainWindow : Window
             SetBusy(true,"正在准备批量导出文字和本地图片……");
             var result=await Request(new {action="export_batch",chats=dialog.SelectedChats,mode=dialog.Mode,
                 start=dialog.StartDate.ToString("yyyy-MM-dd"),end=dialog.EndDate.ToString("yyyy-MM-dd"),folder=dialog.Folder},
-                p=>Notice.Text=$"正在导出第 {p.GetProperty("index").GetInt32()} / {p.GetProperty("total").GetInt32()} 个群聊：{p.GetProperty("name").GetString()}……");
+                p=>Notice.Text=$"正在导出第 {p.GetProperty("index").GetInt32()} / {p.GetProperty("total").GetInt32()} 个会话：{p.GetProperty("name").GetString()}……");
             var groups=result.GetProperty("results").EnumerateArray().ToList();
-            Notice.Text=$"批量导出完成：{groups.Count(g=>g.GetProperty("status").GetString()=="exported")} 个群聊，{result.GetProperty("count").GetInt32()} 条消息；"
-                +$"{groups.Count(g=>g.GetProperty("status").GetString()=="empty")} 个群聊无消息，{groups.Count(g=>g.GetProperty("status").GetString()=="failed")} 个失败。";
+            Notice.Text=$"批量导出完成：{groups.Count(g=>g.GetProperty("status").GetString()=="exported")} 个会话，{result.GetProperty("count").GetInt32()} 条消息；"
+                +$"{groups.Count(g=>g.GetProperty("status").GetString()=="empty")} 个会话无消息，{groups.Count(g=>g.GetProperty("status").GetString()=="failed")} 个失败。";
             new BatchExportResultWindow(result,warning) {Owner=this}.ShowDialog();
         }
         catch(Exception ex) {ShowError(ex);}

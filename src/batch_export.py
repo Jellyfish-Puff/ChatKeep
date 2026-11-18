@@ -29,7 +29,7 @@ def export_batch(reader, request, progress=None):
     start, end = date_range(request)
     chats = request.get('chats')
     if not isinstance(chats, list) or not chats or any(not isinstance(c, str) or not c for c in chats):
-        raise ValueError('请至少选择一个群聊。')
+        raise ValueError('请至少选择一个聊天。')
     chats = list(dict.fromkeys(chats))
     mode = request.get('mode')
     if mode not in ('merged', 'separate'):
@@ -47,8 +47,8 @@ def export_batch(reader, request, progress=None):
 
     def parts():
         if mode == 'merged':
-            yield document_start('批量群聊记录', request['start'], request['end'], f'{len(chats)} 个群聊 · 按群聊分区')
-            yield '<nav aria-label="群聊目录">' + ''.join('<a href="#group-' + str(i) + '">' + html.escape(reader.names.get(c, c)) + '</a>' for i, c in enumerate(chats, 1)) + '</nav>'
+            yield document_start('批量聊天记录', request['start'], request['end'], f'{len(chats)} 个会话 · 按会话分区')
+            yield '<nav aria-label="聊天目录">' + ''.join('<a href="#group-' + str(i) + '">' + html.escape(reader.names.get(c, c)) + '</a>' for i, c in enumerate(chats, 1)) + '</nav>'
         for index, chat in enumerate(chats, 1):
             name = reader.names.get(chat, chat)
             if progress:
@@ -62,7 +62,7 @@ def export_batch(reader, request, progress=None):
                     content = render_messages(records, numbers)
                     stats = record_stats(records)
                     if mode == 'separate':
-                        safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name).strip(' .')[:80] or '群聊'
+                        safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name).strip(' .')[:80] or '聊天'
                         destination = folder / f'{index:02d}_{safe}_{start:%Y%m%d}_{end - datetime.timedelta(days=1):%Y%m%d}.html'
                         write_document(destination, [document_start(name, request['start'], request['end'], f'{len(records)} 条消息'), content, document_end()])
                         result['path'] = str(destination)
@@ -80,12 +80,12 @@ def export_batch(reader, request, progress=None):
                 if result['status'] == 'exported':
                     yield '<p>' + str(result['count']) + ' 条消息</p>' + content
                 else:
-                    yield '<p>' + html.escape('所选日期范围没有消息。' if result['status'] == 'empty' else '此群导出失败：' + result['error']) + '</p>'
+                    yield '<p>' + html.escape('所选日期范围没有消息。' if result['status'] == 'empty' else '此会话导出失败：' + result['error']) + '</p>'
                 yield '</section>'
         if mode == 'merged':
             if not totals['count']:
                 raise _EmptyBatch()
-            yield '<p>合计 ' + str(totals['count']) + ' 条消息 · ' + str(sum(r['status'] == 'failed' for r in results)) + ' 个群聊导出失败</p>' + document_end()
+            yield '<p>合计 ' + str(totals['count']) + ' 条消息 · ' + str(sum(r['status'] == 'failed' for r in results)) + ' 个会话导出失败</p>' + document_end()
 
     try:
         if mode == 'merged':

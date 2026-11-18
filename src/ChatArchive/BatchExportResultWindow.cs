@@ -33,7 +33,7 @@ public sealed class BatchExportResultWindow : Window
         var groups = result.GetProperty("results").EnumerateArray().ToList();
         var lines = new List<string>
         {
-            $"已导出 {groups.Count(g => g.GetProperty("status").GetString() == "exported")} / {groups.Count} 个群聊，共 {result.GetProperty("count").GetInt32()} 条消息。",
+            $"已导出 {groups.Count(g => g.GetProperty("status").GetString() == "exported")} / {groups.Count} 个会话，共 {result.GetProperty("count").GetInt32()} 条消息。",
             $"缩略图：{result.GetProperty("thumbnailImages").GetInt32()} 张；缺失或无法解码：{result.GetProperty("missingImages").GetInt32()} 张。",
             ""
         };
@@ -48,13 +48,13 @@ public sealed class BatchExportResultWindow : Window
             lines.Add(group.GetProperty("name").GetString() + "：" + detail);
         }
         lines.Add("");
-        lines.Add(folder != null ? "保存位置：\n" + folder : "本次未生成 HTML 文件，请查看各群聊结果。");
+        lines.Add(folder != null ? "保存位置：\n" + folder : "本次未生成 HTML 文件，请查看各会话结果。");
         if (warning.Length > 0) lines.Add("\n" + warning);
         var content = new TextBox { Text = string.Join("\n", lines), IsReadOnly = true, IsReadOnlyCaretVisible = true, IsUndoEnabled = false,
             TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, BorderThickness = new(0), Padding = new(0) };
         if (content.Text.Contains('\u20e3')) content.FontFamily = new("Segoe UI Emoji, Microsoft YaHei UI");
-        System.Windows.Automation.AutomationProperties.SetName(content, "批量导出各群聊结果与保存位置，可选择复制");
+        System.Windows.Automation.AutomationProperties.SetName(content, "批量导出各会话结果与保存位置，可选择复制");
         root.Children.Add(content);
     }
 }

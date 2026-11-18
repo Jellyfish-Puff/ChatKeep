@@ -64,7 +64,8 @@ class Program
                 var scrollCases=await ScrollStyleChecks.Run(window,args.FirstOrDefault());
                 var toolbarCases=await ToolbarChecks.Run(window,args.FirstOrDefault());
                 var exportDialogCases=await ExportDialogChecks.Run(window,args.FirstOrDefault());
-                Console.WriteLine(JsonSerializer.Serialize(new {ok=true,messages=payload.Count,cycles=6,viewerCases,batchCases,scrollCases,toolbarCases,exportDialogCases}));
+                var friendChatCases=await FriendChatChecks.Run(window,args.FirstOrDefault());
+                Console.WriteLine(JsonSerializer.Serialize(new {ok=true,messages=payload.Count,cycles=6,viewerCases,batchCases,scrollCases,toolbarCases,exportDialogCases,friendChatCases}));
                 window.Close();Dispatcher.CurrentDispatcher.BeginInvokeShutdown(DispatcherPriority.Background);
             }
             catch(Exception ex)

@@ -66,3 +66,11 @@ v0.1.7正式副本位于 `dist/release-v0.1.7/ChatKeep.exe`，与按钮等宽测
 - 测试聊天数据只写入build下的隔离目录，未打入发布EXE。
 
 诊断脚本：`tools/check_packaged_reader.py`。主EXE支持`--package-check`诊断参数，输出只含成功状态及群聊数量，不写入消息正文。
+
+## v0.1.8 好友聊天本地测试版
+
+入口为 `dist/preview-0.1.8-friends/ChatKeep.exe`。本次会话列表读取与批量HTML代码均有变化，使用 `./tools/package.ps1 -OutputDirectory dist/preview-0.1.8-friends` 完整封装；不能复用0.1.7读取组件。独立启动、封装模块回归、原生图片解码和校验清单均通过，详细范围见 `releases/v0.1.8.md`。本轮仅使用合成数据，尚未连接真实好友聊天验证。
+
+## v0.1.8 正式发布
+
+正式副本为 `dist/release-v0.1.8/ChatKeep.exe`，与已交付的 `dist/preview-0.1.8-compact/ChatKeep.exe` 逐字节一致，未重新构建。文件140715895字节，SHA256 `0a0cfd756978c15072d30aaea8d61551fb051531c935ed45ae7de600d9566023`；同目录包含校验清单与第三方许可证。

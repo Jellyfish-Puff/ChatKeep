@@ -260,8 +260,28 @@ class Reader:
             self.names={row[0]:row[2] or row[1] or row[0] for row in db.execute('SELECT username,nick_name,remark FROM contact')}
         session=snapshot(self.user/'db_storage/session/session.db',keys)
         with closing(sqlite3.connect(session)) as db:
-            chats=[{'id':r[0],'name':self.names.get(r[0],r[0]),'summary':text(r[1]),'time':r[2]} for r in db.execute("SELECT username,summary,last_timestamp FROM SessionTable WHERE is_hidden=0 AND username LIKE '%@chatroom' ORDER BY sort_timestamp DESC")]
-        return {'chats':chats,'status':f'已连接 · {len(chats)} 个群聊','stats':stats}
+            chats=self.conversations(db)
+        groups=sum(c['kind']=='group' for c in chats)
+        return {'chats':chats,'status':f'已连接 · {groups} 个群聊 · {len(chats)-groups} 个好友会话','stats':stats}
+
+    def conversations(self,db):
+        # Keep the existing visible-session boundary. Do not expose the whole
+        # address book (which also contains group members without a conversation).
+        system_users={'weixin','filehelper','fmessage','medianote','floatbottle',
+                      'qmessage','qqmail','tmessage','newsapp','feedsapp','brandsessionholder',
+                      'notification_messages','notifymessage','mphelper','officialaccounts'}
+        chats=[]
+        for username,summary,timestamp in db.execute('SELECT username,summary,last_timestamp FROM SessionTable WHERE is_hidden=0 ORDER BY sort_timestamp DESC'):
+            if not username: continue
+            if username.endswith('@chatroom'):
+                kind='group'
+            elif '@' not in username and not username.startswith('gh_') and username not in system_users:
+                kind='friend'
+            else:
+                continue
+            chats.append({'id':username,'name':self.names.get(username,username),
+                          'summary':text(summary),'time':timestamp,'kind':kind})
+        return chats
 
     def databases(self):
         if not self.user: raise RuntimeError('请先连接微信')
@@ -309,7 +329,7 @@ class Reader:
                         body=''; decode_error=True
                     sender=names.get(r.get('real_sender_id'),'未知发送者')
                     # Some group text records retain a sender prefix.
-                    if body.startswith(sender+':\n'): body=body[len(sender)+2:]
+                    if chat.endswith('@chatroom') and body.startswith(sender+':\n'): body=body[len(sender)+2:]
                     msg={'id':identity,'time':int(r['create_time']),'sort':int(r.get('sort_seq') or 0),'sender':self.names.get(sender,sender),'self':sender==self.user.name.rsplit('_',1)[0],'type':kind,'text':body,'image':None}
                     if kind==3:
                         msg['text']='[图片]'; msg['image']=self.image(chat,body,r.get('packed_info_data'))
